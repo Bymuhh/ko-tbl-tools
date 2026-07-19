@@ -44,6 +44,7 @@ BTN = {  # (normal, hover)
     "purple": ("#7048e8", "#5a37c4"),
     "red":    ("#e8590c", "#c44a08"),
     "gray":   ("#5c6377", "#474d5e"),
+    "teal":   ("#0c8599", "#0a6c7c"),
 }
 
 
@@ -124,6 +125,7 @@ class TblEditor(tk.Tk):
             ("➕  Satır Ekle", self.add_row, "purple"),
             ("🗑  Satır Sil", self.del_row, "red"),
             ("📘  Skill ID", self.open_skill_db, "gray"),
+            ("📤  Çıkart", self.export_selection, "teal"),
         ]:
             self._mkbtn(bar, text, cmd, col).pack(side="left", padx=(0, 7))
 
@@ -148,7 +150,7 @@ class TblEditor(tk.Tk):
                         highlightthickness=1)
         card.pack(fill="both", expand=True)
 
-        self.tree = ttk.Treeview(card, show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(card, show="headings", selectmode="extended")
         ysb = ttk.Scrollbar(card, orient="vertical", command=self.tree.yview)
         xsb = ttk.Scrollbar(card, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=ysb.set, xscrollcommand=xsb.set)
@@ -216,10 +218,18 @@ class TblEditor(tk.Tk):
             self._open_path(p)
 
     def _default_data_dir(self):
-        cand = os.path.normpath(
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Data")
-        )
-        return cand if os.path.isdir(cand) else "C:/NTTGame/KnightOnlineEn/Data"
+        here = os.path.dirname(os.path.abspath(__file__))
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        candidates = [
+            os.path.join(here, "Data"),
+            os.path.join(desktop, "Yeni klasör", "Data"),
+            os.path.join(desktop, "KnightOnline", "EnData"),
+            r"C:\NTTGame\KnightOnlineEn\Data",
+        ]
+        for cand in candidates:
+            if os.path.isdir(cand):
+                return cand
+        return here
 
     def _open_path(self, p):
         if self._busy:
@@ -416,6 +426,123 @@ class TblEditor(tk.Tk):
         self._busy = False
         self._set_status("Kaydetme hatası: %s" % e)
         messagebox.showerror("Kaydedilemedi", str(e))
+
+    # ---- seçimi / filtreyi masaüstüne çıkar ------------------------------
+    def export_selection(self):
+        if self.parsed is None:
+            messagebox.showinfo("Çıkart", "Önce bir .tbl aç.")
+            return
+
+        sel = list(self.tree.selection())
+        if sel:
+            row_indices = [int(i) for i in sel]
+            mode = "secim"
+        else:
+            # Seçim yoksa: filtredeki görünen satırlar
+            visible = list(self.tree.get_children())
+            if not visible:
+                messagebox.showinfo(
+                    "Çıkart",
+                    "Satır seç veya arama ile filtrele, sonra Çıkart'a bas."
+                )
+                return
+            q = self.filter_var.get().strip()
+            if not q and len(visible) == len(self.parsed["rows"]):
+                if not messagebox.askyesno(
+                    "Çıkart",
+                    "Hiç seçim / filtre yok. Tüm tabloyu (%d satır) masaüstüne çıkarmak ister misin?"
+                    % len(visible)
+                ):
+                    return
+            row_indices = [int(i) for i in visible]
+            mode = "filtre" if q else "tum"
+
+        text = self._format_export(row_indices, mode)
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        base = os.path.splitext(os.path.basename(self.path or "tbl"))[0]
+        stamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_name = "%s_export_%s.txt" % (base, stamp)
+        out_path = os.path.join(desktop, out_name)
+
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(text)
+        except OSError as e:
+            messagebox.showerror("Çıkart", "Yazılamadı:\n%s" % e)
+            return
+
+        self._set_status("Çıkarıldı: %s  (%d satır)" % (out_path, len(row_indices)))
+        messagebox.showinfo(
+            "Çıkartıldı",
+            "%d satır masaüstüne yazıldı:\n\n%s" % (len(row_indices), out_path)
+        )
+
+    def _column_headers(self):
+        ct = self.parsed["col_types"]
+        schema = None
+        if self.path:
+            schema = tbl_schemas.column_names(self.path, len(ct))
+        headers = []
+        for i, t in enumerate(ct):
+            tname = tbl.TBL_TYPE_INFO.get(t, ("?",))[0]
+            if schema:
+                headers.append(schema[i])
+            else:
+                headers.append("Kolon %d (%s)" % (i, tname))
+        return headers
+
+    def _format_export(self, row_indices, mode):
+        headers = self._column_headers()
+        width = max(len(h) for h in headers) if headers else 12
+        width = min(max(width, 12), 36)
+
+        lines = []
+        lines.append("=" * 72)
+        lines.append("KO TBL — şifresi çözülmüş satır çıktısı")
+        lines.append("=" * 72)
+        lines.append("Kaynak     : %s" % (self.path or "(isimsiz)"))
+        lines.append("Format     : %s" % self.parsed.get("format", "?"))
+        lines.append("Mod        : %s" % ({
+            "secim": "seçili satırlar",
+            "filtre": "filtre sonucu",
+            "tum": "tüm tablo",
+        }.get(mode, mode)))
+        q = self.filter_var.get().strip()
+        if q:
+            lines.append("Filtre     : %s" % q)
+        lines.append("Satır sayısı: %d" % len(row_indices))
+        lines.append("Kolon sayısı: %d" % len(headers))
+        lines.append("=" * 72)
+        lines.append("")
+
+        for n, ri in enumerate(row_indices, 1):
+            row = self.parsed["rows"][ri]
+            lines.append("-" * 72)
+            lines.append("Kayıt #%d  (tablo satır indeksi: %d)" % (n, ri))
+            lines.append("-" * 72)
+            for h, v in zip(headers, row):
+                if isinstance(v, float):
+                    val = ("%g" % v)
+                else:
+                    val = str(v)
+                # skill id tanı
+                extra = ""
+                if isinstance(v, int) or (isinstance(v, str) and v.isdigit()):
+                    try:
+                        iv = int(v)
+                    except ValueError:
+                        iv = None
+                    if iv is not None:
+                        sn, sc = skill_ids.lookup(iv)
+                        if sn:
+                            extra = "  ← %s [%s]" % (sn, sc)
+                lines.append("%s : %s%s" % (h.ljust(width), val, extra))
+            lines.append("")
+
+        lines.append("=" * 72)
+        lines.append("Son.")
+        lines.append("")
+        return "\n".join(lines)
 
     # ---- Skill ID rehberi -------------------------------------------------
     def open_skill_db(self):
