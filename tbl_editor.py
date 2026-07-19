@@ -22,6 +22,7 @@ from tkinter import ttk, filedialog, messagebox
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tbl
 import tbl_schemas
+import skill_ids
 
 # --- Renk paleti (açık, modern) ------------------------------------------
 BG        = "#eef1f8"     # ana zemin
@@ -122,6 +123,7 @@ class TblEditor(tk.Tk):
         for text, cmd, col in [
             ("➕  Satır Ekle", self.add_row, "purple"),
             ("🗑  Satır Sil", self.del_row, "red"),
+            ("📘  Skill ID", self.open_skill_db, "gray"),
         ]:
             self._mkbtn(bar, text, cmd, col).pack(side="left", padx=(0, 7))
 
@@ -208,10 +210,16 @@ class TblEditor(tk.Tk):
             return
         p = filedialog.askopenfilename(
             title="Bir .tbl dosyası seç",
-            initialdir="C:/NTTGame/KnightOnlineEn/Data",
+            initialdir=self._default_data_dir(),
             filetypes=[("KO tablo", "*.tbl"), ("Tüm dosyalar", "*.*")])
         if p:
             self._open_path(p)
+
+    def _default_data_dir(self):
+        cand = os.path.normpath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Data")
+        )
+        return cand if os.path.isdir(cand) else "C:/NTTGame/KnightOnlineEn/Data"
 
     def _open_path(self, p):
         if self._busy:
@@ -408,6 +416,112 @@ class TblEditor(tk.Tk):
         self._busy = False
         self._set_status("Kaydetme hatası: %s" % e)
         messagebox.showerror("Kaydedilemedi", str(e))
+
+    # ---- Skill ID rehberi -------------------------------------------------
+    def open_skill_db(self):
+        if getattr(self, "_skill_win", None) and self._skill_win.winfo_exists():
+            self._skill_win.lift()
+            self._skill_win.focus_force()
+            return
+
+        win = tk.Toplevel(self)
+        self._skill_win = win
+        win.title("Skill / Pot ID Rehberi")
+        win.geometry("720x520")
+        win.minsize(520, 360)
+        win.configure(bg=BG)
+
+        top = tk.Frame(win, bg=BG, padx=12, pady=10)
+        top.pack(fill="x")
+        tk.Label(top, text="Skill / Pot ID Rehberi", bg=BG, fg=APPBAR,
+                 font=("Segoe UI Semibold", 13)).pack(side="left")
+
+        search_box = tk.Frame(top, bg=CARD, highlightbackground="#c9d0e0",
+                              highlightthickness=1)
+        search_box.pack(side="right")
+        tk.Label(search_box, text="🔍", bg=CARD, fg=MUTED).pack(side="left", padx=(8, 2))
+        qvar = tk.StringVar()
+        qent = tk.Entry(search_box, textvariable=qvar, width=28, relief="flat",
+                        bg=CARD, font=("Segoe UI", 10))
+        qent.pack(side="left", padx=(0, 8), pady=4, ipady=2)
+
+        filt = tk.Frame(win, bg=BG, padx=12)
+        filt.pack(fill="x", pady=(0, 6))
+        tk.Label(filt, text="Kategori:", bg=BG, fg=STATUS_FG,
+                 font=("Segoe UI", 9)).pack(side="left")
+        cats = ["Tümü"] + skill_ids.categories()
+        cat_var = tk.StringVar(value="Tümü")
+        cat_cb = ttk.Combobox(filt, textvariable=cat_var, values=cats,
+                              state="readonly", width=28)
+        cat_cb.pack(side="left", padx=8)
+
+        body = tk.Frame(win, bg=BG, padx=12)
+        body.pack(fill="both", expand=True)
+        card = tk.Frame(body, bg=CARD, highlightbackground="#d3d9e8",
+                        highlightthickness=1)
+        card.pack(fill="both", expand=True)
+
+        tree = ttk.Treeview(card, columns=("id", "name", "cat"),
+                            show="headings", selectmode="browse")
+        tree.heading("id", text="ID")
+        tree.heading("name", text="İsim")
+        tree.heading("cat", text="Kategori")
+        tree.column("id", width=90, anchor="w")
+        tree.column("name", width=280, anchor="w")
+        tree.column("cat", width=220, anchor="w")
+        ysb = ttk.Scrollbar(card, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=ysb.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        ysb.grid(row=0, column=1, sticky="ns")
+        card.rowconfigure(0, weight=1)
+        card.columnconfigure(0, weight=1)
+        tree.tag_configure("odd", background=ROW_ODD)
+        tree.tag_configure("even", background=ROW_EVEN)
+
+        tip = tk.Label(win, text="Çift tık = ID panoya kopyala + ana tabloda filtrele",
+                       bg=STATUS_BG, fg=STATUS_FG, anchor="w",
+                       font=("Segoe UI", 9), padx=14, pady=5)
+        tip.pack(side="bottom", fill="x")
+
+        def refresh(_evt=None):
+            tree.delete(*tree.get_children())
+            q = qvar.get().strip().lower()
+            cat = cat_var.get()
+            n = 0
+            for sid, name, category in skill_ids.SKILL_DB:
+                if cat != "Tümü" and category != cat:
+                    continue
+                hay = ("%d %s %s" % (sid, name, category)).lower()
+                if q and q not in hay:
+                    continue
+                tag = "odd" if n % 2 else "even"
+                tree.insert("", "end", values=(sid, name, category), tags=(tag,))
+                n += 1
+            tip.config(text="Gösterilen: %d / %d  ·  Çift tık = kopyala + filtrele" %
+                            (n, len(skill_ids.SKILL_DB)))
+
+        def on_pick(_evt=None):
+            sel = tree.selection()
+            if not sel:
+                return
+            vals = tree.item(sel[0], "values")
+            sid = str(vals[0])
+            name = vals[1]
+            try:
+                win.clipboard_clear()
+                win.clipboard_append(sid)
+            except tk.TclError:
+                pass
+            self.filter_var.set(sid)
+            self._apply_filter()
+            self._set_status("Seçildi: %s (%s) — panoya kopyalandı" % (name, sid))
+            tip.config(text="Kopyalandı: %s  (%s)" % (sid, name))
+
+        qent.bind("<KeyRelease>", lambda e: refresh())
+        cat_cb.bind("<<ComboboxSelected>>", refresh)
+        tree.bind("<Double-1>", on_pick)
+        refresh()
+        qent.focus_set()
 
 
 if __name__ == "__main__":
